@@ -7,9 +7,14 @@ A browser extension that makes stroker scripts for any video on Pornhub and play
 ## What it does
 
 1. On any `pornhub.com/view_video.php` or `/embed/` page, an **H·AI** button appears in the bottom-right corner.
-2. **Generate AI script** plays the video fast and muted (up to 8×), and analyses the motion frame by frame. A 10-minute video at 4× takes about 2.5 minutes.
-3. The finished script is saved per video, so the next visit is instant. **Tuning** sliders (range, sensitivity, smoothing, speed limit, invert) apply immediately without re-scanning.
-4. **Connect** your Handy with its connection key. The script is uploaded, and the device follows the video through play, pause, seek and buffering.
+2. **Connect** your Handy with its connection key, then just **press play**. Real-time mode analyses the video as it plays and drives the device straight away. It starts within about 1.5 s, and re-locks about 1.3 s after you skip to a different part of the video. No waiting, no pre-scan.
+3. Optional: **Pre-scan whole video** analyses the entire video ahead of time (fast, muted, up to 8×) for the tightest sync. Once a video is pre-scanned, or you import a `.funscript`, the extension switches to script mode for it automatically. Saved scripts make the next visit instant, and the **Tuning** sliders apply immediately.
+
+### Real-time mode
+
+Turning points are only known *after* they happen, and commands take a network round trip to reach the device. So real-time mode works out the stroke **tempo** and **timing** from the last few strokes, predicts the next turning point, and sends the device "move to the other end, arriving at time T" commands. These are timed ahead by the measured latency, so the device arrives when the video does. Each new stroke corrects the prediction.
+
+This uses The Handy's direct-position mode (HDSP, `PUT /hdsp/xpt`): about one request per half-stroke. It follows rhythmic motion very closely (about 1 ms arrival error on the test video). Irregular motion follows less precisely than a pre-scan, because a prediction can't know an unexpected change in rhythm until it happens. If the device runs early or late, adjust **Timing offset**.
 
 ### How the "AI" works
 
@@ -43,7 +48,7 @@ The same manifest works in Firefox 128+. On desktop, use `about:debugging` → *
   1. Install **Userscripts** from the App Store and open it once to pick its scripts folder.
   2. Turn it on: Settings → Apps → Safari → Extensions → Userscripts → allow it, and set the websites option to *Allow*.
   3. In Safari, open the `.user.js` file (GitHub → file → *Raw*). Tap the extensions icon in the address bar → Userscripts → **Install**. Or save the file into the app's scripts folder in Files.
-  4. Open a video, press play once, tap **H·AI**, enter your connection key, then **Generate AI script**.
+  4. Open a video, tap **H·AI**, enter your connection key, tap **Connect**, and press play.
 
   Run `npm run build:userscript` after changing the sources. `npm run test:userscript` tests it in Chromium with a fake userscript API.
 
@@ -57,7 +62,8 @@ Phones scan more slowly. The scanner measures what the device can actually displ
 
 | Control | What it does |
 |---|---|
-| Generate AI script | Scans the video. Stop keeps what was scanned so far; press again to continue. |
+| (just press play) | Real-time mode: strokes follow the video live, including after seeking. |
+| Pre-scan whole video | Optional full analysis for the tightest sync. Stop keeps what was scanned so far; press again to continue. |
 | Import / Export | Load a `.funscript`, or save the current script (works with other players too). |
 | Timing offset | Shifts the device earlier (+) or later (−) if it lags the video. |
 | Bottom / Top | Stroke range in device units (0–100). |
@@ -84,6 +90,7 @@ All Handy endpoints are in `src/shared/handy.js` and use **API v2** with HSSP:
 | Load | `PUT /mode {mode:1}`, then `PUT /hssp/setup {url}` |
 | Play | `PUT /hssp/play {estimatedServerTime, startTime}` |
 | Stop | `PUT /hssp/stop` |
+| Real-time move | `PUT /mode {mode:2}` once, then `PUT /hdsp/xpt {position, duration, stopOnTarget, immediateResponse}` |
 
 All requests carry the `X-Connection-Key` header. The base URLs can be overridden under *Advanced* in the options page. If The Handy changes or retires v2, that file is the only place to update.
 
@@ -92,7 +99,8 @@ All requests carry the `X-Connection-Key` header. The base URLs can be overridde
 ```
 npm install          # Playwright, for the end-to-end test
 npm test             # unit tests: motion analysis, funscript, Handy client
-npm run test:e2e     # loads the extension in Chromium against a mocked page and a fake Handy API
+npm run test:e2e     # pre-scan flow: extension in Chromium, mocked page, fake Handy API
+npm run test:realtime # real-time flow: play, check move timing, seek, pause
 npm run lint
 npm run package      # dist/handy-ai-scripts-<version>.zip
 ```
@@ -114,9 +122,11 @@ manifest.json            MV3, works in Chrome (service worker) and Firefox (even
 rules/cdn-cors.json      CORS header for the hidden-copy fallback
 src/background.js        All network calls to The Handy, upload cache, clock offset
 src/shared/motion.js     Block matching, PCA analysis, script generation
+src/shared/live.js       Real-time tracker (causal PCA + turning points) and rhythm prediction
 src/shared/funscript.js  Parse / serialise / CSV / speed limit
 src/shared/handy.js      Handy REST client
-src/content/scanner.js   Plays the video fast and samples frames
+src/content/scanner.js   Pre-scan: plays the video fast and samples frames
+src/content/live.js      Real-time: analyses while playing, schedules device moves
 src/content/panel.js     In-page UI (shadow DOM)
 src/content/main.js      Wires everything together, video ↔ Handy sync
 src/options/             Toolbar popup / options page

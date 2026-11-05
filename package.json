@@ -10,7 +10,8 @@
     "icons": "node tools/make-icons.js",
     "package": "node tools/package.js",
     "build:userscript": "node tools/build-userscript.js",
-    "test:userscript": "node test/e2e/userscript.js"
+    "test:userscript": "node test/e2e/userscript.js",
+    "test:realtime": "node test/e2e/realtime.js"
   },
   "devDependencies": {
     "playwright": "^1.63.0"

@@ -898,6 +898,238 @@ async function fetch(url, init) {
 })(typeof globalThis !== 'undefined' ? globalThis : this);
 
 
+// ---- src/shared/live.js ----
+/*
+ * Real-time tracking: turns frame-by-frame motion into strokes while the
+ * video plays, with no pre-scan.
+ *
+ *   tracker = createLiveTracker()
+ *     push(t, feat, cut) for every analysed frame (causal: only past frames).
+ *     Runs the same PCA as the offline analysis over a trailing ~2 s window,
+ *     integrates velocity to a position, high-passes it and detects turning
+ *     points with an adaptive zig-zag. Returns { x, extreme } where extreme
+ *     is a confirmed turning point (time of the actual extreme, not of its
+ *     confirmation).
+ *
+ *   rhythm = createRhythm()
+ *     onExtreme(e) with each confirmed turning point; predict(t) gives the
+ *     next turning point after media time t, from the recent stroke tempo.
+ *     The device is driven from these predictions so it arrives at each end
+ *     of the stroke together with the video despite network latency.
+ */
+(function (root) {
+  'use strict';
+  const HAI = root.HAI || (root.HAI = {});
+  const motion = HAI.motion || (typeof require === 'function' ? require('./motion.js') : null);
+  const { windowComponent } = motion._internal;
+
+  function median(a) {
+    if (!a.length) return 0;
+    const s = a.slice().sort((x, y) => x - y);
+    return s[s.length >> 1];
+  }
+
+  function createLiveTracker(opts) {
+    const o = Object.assign({ windowSec: 2, sensitivity: 0.5, hpSec: 1.0, rmsSec: 2.0 }, opts);
+    let buf; // [{t, feat}]
+    let outV; // latest velocity estimate for each buffered sample (sign-aligned)
+    let x;
+    let ema;
+    let rms2;
+    let dir;
+    let hi;
+    let lo;
+    let lastT;
+    let started;
+
+    function reset() {
+      buf = [];
+      outV = [];
+      x = 0;
+      ema = 0;
+      rms2 = 0;
+      dir = 0;
+      hi = null;
+      lo = null;
+      lastT = -1;
+      started = 0;
+    }
+    reset();
+
+    function push(t, feat, cut) {
+      if (cut || lastT < 0 || t < lastT || t - lastT > 0.6) {
+        reset();
+        started = t;
+      }
+      const dt = lastT < 0 ? 0 : t - lastT;
+      lastT = t;
+      buf.push({ t, feat });
+      while (buf.length && t - buf[0].t > o.windowSec) {
+        buf.shift();
+        outV.shift();
+      }
+      const n = buf.length;
+      if (n < 8) {
+        outV.push(0);
+        return { x: 0, extreme: null, warm: false };
+      }
+      const feats = buf.map((b) => b.feat);
+      const comp = windowComponent(feats, 0, n);
+      // Keep the sign consistent with what was output for the same frames.
+      let dot = 0;
+      let na = 0;
+      let nb = 0;
+      for (let i = 0; i < n - 1; i++) {
+        dot += outV[i] * comp.v[i];
+        na += outV[i] * outV[i];
+        nb += comp.v[i] * comp.v[i];
+      }
+      let sign = 1;
+      if (na > 0 && nb > 0 && Math.abs(dot / Math.sqrt(na * nb)) > 0.2) sign = Math.sign(dot);
+      outV = Array.from(comp.v, (v) => v * sign);
+      const v = outV[n - 1];
+
+      // Position (funscript direction: image-down = lower position).
+      x -= v;
+      if (dt > 0) {
+        ema += (x - ema) * Math.min(1, dt / o.hpSec);
+      }
+      const xh = x - ema;
+      if (dt > 0) rms2 += (xh * xh - rms2) * Math.min(1, dt / o.rmsSec);
+      const rms = Math.sqrt(rms2);
+
+      // Adaptive zig-zag, same thresholds as the offline generator.
+      const sens = o.sensitivity;
+      const thr = Math.max(0.25 + 1.0 * (1 - sens), (1.7 - 1.4 * sens) * rms);
+      let extreme = null;
+      if (!hi || xh > hi.x) hi = { t, x: xh };
+      if (!lo || xh < lo.x) lo = { t, x: xh };
+      if (t - started > 0.8) {
+        if (dir >= 0 && hi.x - xh > thr) {
+          extreme = { t: hi.t, x: hi.x, type: 1 };
+          dir = -1;
+          lo = { t, x: xh };
+        } else if (dir <= 0 && xh - lo.x > thr) {
+          extreme = { t: lo.t, x: lo.x, type: -1 };
+          dir = 1;
+          hi = { t, x: xh };
+        }
+      }
+      return { x: xh, rms, extreme, warm: true };
+    }
+
+    return {
+      push,
+      reset,
+      setSensitivity(s) {
+        o.sensitivity = s;
+      },
+    };
+  }
+
+  /**
+   * Stroke rhythm from confirmed turning points.
+   * opts: minPos, maxPos (device range)
+   */
+  function createRhythm(opts) {
+    const o = Object.assign({ minPos: 0, maxPos: 100, minHalf: 0.09, maxHalf: 2.5 }, opts);
+    let ext = [];
+    let refDepth = 0;
+
+    function reset() {
+      ext = [];
+    }
+
+    function onExtreme(e) {
+      const last = ext[ext.length - 1];
+      if (last && last.type === e.type) {
+        // Same side twice (missed one): keep the more extreme.
+        if ((e.type === 1 && e.x > last.x) || (e.type === -1 && e.x < last.x)) ext[ext.length - 1] = e;
+        return;
+      }
+      if (last && e.t - last.t < o.minHalf) return;
+      ext.push(e);
+      if (ext.length > 12) ext.shift();
+      const d = depth();
+      if (d > 0) refDepth = Math.max(d, refDepth * 0.97);
+    }
+
+    /**
+     * Half a stroke cycle, from full cycles (top->top, bottom->bottom) so a
+     * detection bias on one side cancels out; trimmed mean because frame
+     * timing quantises individual intervals.
+     */
+    function halfPeriod() {
+      const iv = [];
+      for (let i = 2; i < ext.length; i++) {
+        const d = (ext[i].t - ext[i - 2].t) / 2;
+        if (d >= o.minHalf && d <= o.maxHalf) iv.push(d);
+      }
+      if (iv.length < 2) {
+        for (let i = 1; i < ext.length; i++) {
+          const d = ext[i].t - ext[i - 1].t;
+          if (d >= o.minHalf && d <= o.maxHalf) iv.push(d);
+        }
+      }
+      if (iv.length < 2) return 0;
+      const recent = iv.slice(-8).sort((a, b) => a - b);
+      const trimmed = recent.length >= 4 ? recent.slice(1, -1) : recent;
+      return trimmed.reduce((a, b) => a + b, 0) / trimmed.length;
+    }
+
+    function depth() {
+      const ds = [];
+      for (let i = 1; i < ext.length; i++) ds.push(Math.abs(ext[i].x - ext[i - 1].x));
+      return median(ds.slice(-6));
+    }
+
+    function posFor(type) {
+      const lo = Math.min(o.minPos, o.maxPos);
+      const hi = Math.max(o.minPos, o.maxPos);
+      const mid = (lo + hi) / 2;
+      const half = (hi - lo) / 2;
+      const rel = refDepth > 0 ? Math.max(0.4, Math.min(1, depth() / refDepth)) : 1;
+      return Math.round(type === 1 ? mid + rel * half : mid - rel * half);
+    }
+
+    /** Next turning point strictly after media time t, or null if no rhythm. */
+    function predict(t) {
+      const H = halfPeriod();
+      const last = ext[ext.length - 1];
+      if (!H || !last) return null;
+      if (t - last.t > 2.5 * H + 0.6) return null; // motion stopped
+      let k = Math.max(1, Math.ceil((t - last.t) / H + 1e-9));
+      let at = last.t + k * H;
+      if (at <= t) {
+        k++;
+        at += H;
+      }
+      const type = k % 2 === 1 ? -last.type : last.type;
+      return { t: at, type, pos: posFor(type), halfPeriod: H };
+    }
+
+    return {
+      onExtreme,
+      predict,
+      reset,
+      halfPeriod,
+      posFor,
+      get extremes() {
+        return ext;
+      },
+      setRange(minPos, maxPos) {
+        o.minPos = minPos;
+        o.maxPos = maxPos;
+      },
+    };
+  }
+
+  const api = { createLiveTracker, createRhythm };
+  HAI.live = api;
+  if (typeof module !== 'undefined' && module.exports) module.exports = api;
+})(typeof globalThis !== 'undefined' ? globalThis : this);
+
+
 // ---- src/shared/handy.js ----
 /*
  * Minimal client for The Handy's cloud REST API (v2), HSSP mode.
@@ -919,6 +1151,7 @@ async function fetch(url, init) {
     uploadUrl: 'https://www.handyfeeling.com/api/hosting/v2/upload',
   };
   const MODE_HSSP = 1;
+  const MODE_HDSP = 2; // direct position streaming (real-time mode)
 
   class HandyError extends Error {
     constructor(message, status) {
@@ -936,6 +1169,7 @@ async function fetch(url, init) {
     let key = opts.connectionKey || '';
     let offset = opts.serverOffset || 0; // serverTime - localTime, ms
     let offsetAt = opts.serverOffsetAt || 0;
+    let mode = null; // last mode we set, to avoid a request per stroke
 
     async function call(method, path, body) {
       if (!key) throw new HandyError('Enter your Handy connection key first');
@@ -1040,6 +1274,7 @@ async function fetch(url, init) {
       /** Put the device in HSSP mode and have it download the script. */
       async setupScript(url) {
         await call('PUT', '/mode', { mode: MODE_HSSP });
+        mode = MODE_HSSP;
         const d = await call('PUT', '/hssp/setup', { url });
         if (typeof d.result === 'number' && d.result < 0) {
           throw new HandyError('Handy could not load the script (code ' + d.result + ')');
@@ -1065,10 +1300,27 @@ async function fetch(url, init) {
       async stop() {
         return call('PUT', '/hssp/stop');
       },
+
+      /**
+       * Real-time mode: move to `position` (0-100 %) taking `duration` ms.
+       * Uses HDSP; switches the device into that mode on first use.
+       */
+      async moveTo(position, duration) {
+        if (mode !== MODE_HDSP) {
+          await call('PUT', '/mode', { mode: MODE_HDSP });
+          mode = MODE_HDSP;
+        }
+        return call('PUT', '/hdsp/xpt', {
+          stopOnTarget: true,
+          immediateResponse: true,
+          position: Math.max(0, Math.min(100, Math.round(position))),
+          duration: Math.max(1, Math.round(duration)),
+        });
+      },
     };
   }
 
-  const api = { createHandyClient, HandyError, DEFAULTS, MODE_HSSP };
+  const api = { createHandyClient, HandyError, DEFAULTS, MODE_HSSP, MODE_HDSP };
   HAI.handy = api;
   if (typeof module !== 'undefined' && module.exports) module.exports = api;
 })(typeof globalThis !== 'undefined' ? globalThis : this);
@@ -1184,6 +1436,11 @@ const handlers = {
   async stop() {
     const c = await getClient();
     await c.stop();
+    return {};
+  },
+  async move(msg) {
+    const c = await getClient();
+    await c.moveTo(msg.position, msg.duration);
     return {};
   },
 };
@@ -1355,6 +1612,7 @@ chrome.runtime.onStartup &&
       let finished = false;
       const recentDt = [];
       let reseeking = false;
+      let block = { idx: 0, t: from, gray: null }; // last point known to be sampled densely enough
 
       const finish = (err) => {
         if (finished) return;
@@ -1397,17 +1655,20 @@ chrome.runtime.onStartup &&
           samples.cut.push(true);
         }
         // Adaptive speed: if the device can't present enough frames at this
-        // rate (slow phone, dropped frames), halve it. Changing rate makes
-        // Chromium briefly deliver frames out of order, so let it settle and
-        // start a new segment afterwards.
+        // rate (slow phone, dropped frames, low-refresh screen), halve it.
+        // The too-sparse block is thrown away and re-scanned at the new rate,
+        // resuming from the last good frame so motion stays continuous.
         if (lastT >= 0 && t > lastT) {
           recentDt.push(t - lastT);
-          if (recentDt.length >= 24) {
-            const med = recentDt.slice().sort((x, y) => x - y)[12];
+          if (recentDt.length >= 12) {
+            const med = recentDt.slice().sort((x, y) => x - y)[6];
             recentDt.length = 0;
             if (med > TARGET_DT * 1.3 && video.playbackRate > 1) {
-              // Pause, slow down, step back to the last sampled frame and
-              // resume, so motion stays continuous across the switch.
+              samples.t.length = block.idx;
+              samples.feat.length = block.idx;
+              samples.cut.length = block.idx;
+              prev = block.gray;
+              lastT = block.idx ? block.t : -1;
               reseeking = true;
               video.pause();
               video.playbackRate = Math.max(1, video.playbackRate / 2);
@@ -1418,9 +1679,11 @@ chrome.runtime.onStartup &&
                 if (!finished && !document.hidden) video.play().catch(() => {});
               };
               video.addEventListener('seeked', resume);
-              video.currentTime = lastT;
+              video.currentTime = block.idx ? block.t : from;
               return;
             }
+            // This block was fine: it becomes the rewind point.
+            block = { idx: samples.t.length, t, gray };
           }
         }
         prev = gray;
@@ -1577,7 +1840,292 @@ chrome.runtime.onStartup &&
     }
   }
 
-  HAI.scanner = { scan, CancelledError };
+  HAI.scanner = { scan, CancelledError, frameLoop };
+})(typeof globalThis !== 'undefined' ? globalThis : this);
+
+
+// ---- src/content/live.js ----
+/*
+ * Real-time mode controller: analyses the video while it plays at normal
+ * speed and drives the device ahead of time from the predicted rhythm.
+ * No pre-scan; seeking anywhere just re-locks within a couple of seconds.
+ *
+ * createLiveEngine({ onMove(position, durationMs), onStatus(text), cloneHost,
+ *                    getParams() -> {minPos, maxPos, sensitivity, maxSpeed},
+ *                    getLatencyMs() -> ms from sending a command to the device moving })
+ */
+(function (root) {
+  'use strict';
+  const HAI = root.HAI || (root.HAI = {});
+  const { motion, live, scanner } = HAI;
+
+  const FRAME_W = 128;
+  const MIN_GAP = 1 / 24; // analyse at most ~24 frames per second of video
+  const CUT_DIFF = 30;
+
+  function createLiveEngine(hooks) {
+    let video = null; // the page's player (clock + controls)
+    let src = null; // what we read pixels from (player, or a CORS copy)
+    let clone = null;
+    let cloneTimer = 0;
+    let stopLoop = null;
+    let canvas = null;
+    let ctx = null;
+    let est = null;
+    let prev = null;
+    let lastT = -1;
+    let enabled = false;
+    let failed = '';
+    let timer = 0;
+    let lastSent = null;
+    let lastPos = 50;
+    let history = []; // recent turning points {at, pos} for the graph
+    let statusAt = 0;
+    const tracker = live.createLiveTracker();
+    const rhythm = live.createRhythm();
+
+    function status(text, force) {
+      const now = Date.now();
+      if (!force && now - statusAt < 700) return;
+      statusAt = now;
+      hooks.onStatus && hooks.onStatus(text);
+    }
+
+    function resetTracking() {
+      tracker.reset();
+      rhythm.reset();
+      prev = null;
+      lastT = -1;
+      lastSent = null;
+      history = [];
+      clearTimeout(timer);
+    }
+
+    function setupCanvas(v) {
+      const vw = v.videoWidth || 16;
+      const vh = v.videoHeight || 9;
+      const h = Math.max(32, Math.round((FRAME_W * vh) / vw / 8) * 8);
+      if (canvas && canvas.height === h) return;
+      canvas = document.createElement('canvas');
+      canvas.width = FRAME_W;
+      canvas.height = h;
+      ctx = canvas.getContext('2d', { willReadFrequently: true });
+      ctx.imageSmoothingEnabled = true;
+      ctx.imageSmoothingQuality = 'high';
+      est = motion.createMotionEstimator(FRAME_W, h);
+      prev = null;
+    }
+
+    function onFrame(t) {
+      if (!enabled || !src) return;
+      if (lastT >= 0 && t >= lastT && t - lastT < MIN_GAP) return;
+      if (!src.videoWidth) return;
+      setupCanvas(src);
+      let img;
+      try {
+        ctx.drawImage(src, 0, 0, canvas.width, canvas.height);
+        img = ctx.getImageData(0, 0, canvas.width, canvas.height);
+      } catch (e) {
+        if (e && e.name === 'SecurityError' && src === video) return useClone();
+        return;
+      }
+      const gray = motion.toGray(img.data, new Uint8Array(canvas.width * canvas.height));
+      if (!prev) {
+        prev = gray;
+        lastT = t;
+        tracker.push(t, new Float32Array(est.nb * 2), true);
+        return;
+      }
+      const r = est.estimate(prev, gray);
+      if (r.meanDiff < 0.05) return; // repeated frame
+      prev = gray;
+      const cut = r.meanDiff > CUT_DIFF;
+      if (cut) rhythm.reset();
+      lastT = t;
+      const p = hooks.getParams();
+      tracker.setSensitivity(p.sensitivity);
+      rhythm.setRange(p.minPos, p.maxPos);
+      const out = tracker.push(t, r.feat, cut);
+      if (out.extreme) {
+        rhythm.onExtreme(out.extreme);
+        history.push({ at: Math.round(out.extreme.t * 1000), pos: rhythm.posFor(out.extreme.type) });
+        if (history.length > 40) history.shift();
+        plan(false);
+      }
+      const H = rhythm.halfPeriod();
+      if (H && rhythm.predict(t)) status('Real-time · tracking ' + (1 / (2 * H)).toFixed(1) + ' strokes/s');
+      else status(out.warm ? 'Real-time · looking for a rhythm…' : 'Real-time · warming up…');
+    }
+
+    /**
+     * Send the device toward the next predicted turning point so that it
+     * arrives when the video does. Re-runs when each one is reached and
+     * whenever a new turning point refines the prediction.
+     */
+    function plan(fromTimer) {
+      clearTimeout(timer);
+      if (!enabled || !video || video.paused || video.seeking) return;
+      const rate = video.playbackRate || 1;
+      const now = video.currentTime;
+      const L = Math.max(0, hooks.getLatencyMs());
+      let after = now + (L / 1000) * rate;
+      if (fromTimer && lastSent) after = Math.max(after, lastSent.t + 0.01);
+      const p = rhythm.predict(after);
+      if (!p) {
+        lastSent = null;
+        return;
+      }
+      const untilMs = ((p.t - now) / rate) * 1000;
+      const same = lastSent && lastSent.type === p.type && Math.abs(lastSent.t - p.t) < 0.12;
+      if (!same) {
+        const params = hooks.getParams();
+        let duration = untilMs - L;
+        const travel = Math.abs(p.pos - lastPos);
+        duration = Math.max(duration, 60, (travel / Math.max(50, params.maxSpeed)) * 1000);
+        hooks.onMove && hooks.onMove(p.pos, duration);
+        lastSent = p;
+        lastPos = p.pos;
+      }
+      // Next decision just before the device reaches this target.
+      timer = setTimeout(() => plan(true), Math.max(30, untilMs - L));
+    }
+
+    function startLoop() {
+      if (stopLoop || !src) return;
+      stopLoop = scanner.frameLoop(src, onFrame);
+    }
+    function stopLoopNow() {
+      if (stopLoop) stopLoop();
+      stopLoop = null;
+    }
+
+    /** Page player can't be read (cross-origin): follow it with a CORS copy. */
+    function useClone() {
+      stopLoopNow();
+      const url = video.currentSrc || video.src;
+      if (!/^https?:/i.test(url)) {
+        failed = 'Real-time: this video can’t be analysed (protected stream).';
+        status(failed, true);
+        return;
+      }
+      clone = document.createElement('video');
+      clone.crossOrigin = 'anonymous';
+      clone.muted = true;
+      clone.playsInline = true;
+      clone.setAttribute('playsinline', '');
+      clone.preload = 'auto';
+      clone.style.cssText = 'width:100%;max-height:90px;display:block;border-radius:6px;background:#000';
+      clone.addEventListener('error', () => {
+        failed = 'Real-time: the video server blocks frame access. Try Import instead.';
+        status(failed, true);
+        dropClone();
+      });
+      (hooks.cloneHost || document.body).appendChild(clone);
+      clone.src = url;
+      src = clone;
+      followClone();
+      cloneTimer = setInterval(followClone, 1000);
+      startLoop();
+    }
+    function followClone() {
+      if (!clone || !video) return;
+      if (Math.abs(clone.playbackRate - video.playbackRate) > 0.01) clone.playbackRate = video.playbackRate;
+      if (Math.abs(clone.currentTime - video.currentTime) > 0.3) {
+        clone.currentTime = video.currentTime;
+        resetTracking();
+      }
+      if (video.paused && !clone.paused) clone.pause();
+      if (!video.paused && clone.paused && enabled) clone.play().catch(() => {});
+    }
+    function dropClone() {
+      clearInterval(cloneTimer);
+      if (clone) {
+        clone.removeAttribute('src');
+        clone.load();
+        clone.remove();
+      }
+      clone = null;
+      src = video;
+    }
+
+    function onEvent(e) {
+      if (!enabled) return;
+      switch (e.type) {
+        case 'seeking':
+          resetTracking();
+          if (clone) followClone();
+          status('Real-time · re-locking…', true);
+          break;
+        case 'pause':
+        case 'ended':
+        case 'waiting':
+          clearTimeout(timer);
+          lastSent = null;
+          if (clone) followClone();
+          break;
+        case 'playing':
+        case 'play':
+          if (clone) followClone();
+          startLoop();
+          plan(false);
+          break;
+        case 'ratechange':
+          if (clone) followClone();
+          plan(false);
+          break;
+        default:
+      }
+    }
+    const EVENTS = ['seeking', 'pause', 'ended', 'waiting', 'playing', 'play', 'ratechange'];
+
+    return {
+      attach(v) {
+        this.detach();
+        video = v;
+        src = v;
+        failed = '';
+        resetTracking();
+        if (v) EVENTS.forEach((ev) => v.addEventListener(ev, onEvent));
+        if (enabled && v) startLoop();
+      },
+      detach() {
+        stopLoopNow();
+        dropClone();
+        if (video) EVENTS.forEach((ev) => video.removeEventListener(ev, onEvent));
+        video = null;
+        src = null;
+        resetTracking();
+      },
+      setEnabled(on) {
+        if (on === enabled) return;
+        enabled = on;
+        if (on && video) {
+          resetTracking();
+          startLoop();
+          if (clone) followClone();
+          status(failed || (video.paused ? 'Real-time · press play' : 'Real-time · warming up…'), true);
+        } else {
+          stopLoopNow();
+          clearTimeout(timer);
+          if (clone) clone.pause();
+        }
+      },
+      get enabled() {
+        return enabled;
+      },
+      get failed() {
+        return failed;
+      },
+      /** Recent and upcoming turning points, for the graph. */
+      actions() {
+        const out = history.slice();
+        if (lastSent) out.push({ at: Math.round(lastSent.t * 1000), pos: lastSent.pos });
+        return out;
+      },
+    };
+  }
+
+  HAI.createLiveEngine = createLiveEngine;
 })(typeof globalThis !== 'undefined' ? globalThis : this);
 
 
@@ -1666,8 +2214,9 @@ details summary { cursor: pointer; color: #9a9aab; font-size: 12px; text-transfo
     <div class="preview"></div>
     <canvas class="graph" width="600" height="144"></canvas>
     <canvas class="heat" width="600" height="20"></canvas>
+    <div class="hint">Works in real time as you watch, and after seeking anywhere. Pre-scanning is optional and gives tighter sync.</div>
     <div class="row">
-      <button class="b primary grow" data-a="scan">Generate AI script</button>
+      <button class="b primary grow" data-a="scan">Pre-scan whole video</button>
       <button class="b" data-a="cancel" hidden>Stop</button>
     </div>
     <div class="row">
@@ -1830,7 +2379,7 @@ details summary { cursor: pointer; color: #9a9aab; font-size: 12px; text-transfo
       setHasScript(has, scannedAll) {
         btn('export').disabled = !has;
         btn('delete').disabled = !has;
-        btn('scan').textContent = has ? (scannedAll ? 'Re-scan video' : 'Continue scan') : 'Generate AI script';
+        btn('scan').textContent = has ? (scannedAll ? 'Re-scan video' : 'Continue pre-scan') : 'Pre-scan whole video';
       },
 
       setVideoReady(ready) {
@@ -1960,7 +2509,9 @@ details summary { cursor: pointer; color: #9a9aab; font-size: 12px; text-transfo
     scanning: false,
     abort: null,
   };
-  const handy = { connected: false, loadedHash: null, loading: null, playing: false, lastError: '' };
+  const handy = { connected: false, loadedHash: null, loading: null, playing: false, lastError: '', rtt: 0 };
+  let liveEngine = null;
+  let liveStatus = '';
 
   // ------------------------------------------------------------ helpers --
 
@@ -2023,6 +2574,59 @@ details summary { cursor: pointer; color: #9a9aab; font-size: 12px; text-transfo
     return v && Number.isFinite(v.duration) ? v.duration : 0;
   }
 
+  // ------------------------------------------------------------ modes --
+
+  /** A finished script (full scan or import) uses HSSP; otherwise real-time. */
+  function hasFullScript() {
+    const rec = cur.rec;
+    if (!rec || !cur.actions || !cur.actions.length) return false;
+    if (rec.imported) return true;
+    const dur = durationOf(cur.video) || rec.duration || 0;
+    return (rec.scannedTo || 0) >= dur - 1;
+  }
+
+  function isLive() {
+    return !hasFullScript();
+  }
+
+  function updateMode() {
+    if (!liveEngine) return;
+    liveEngine.setEnabled(!!cur.video && !cur.scanning && isLive());
+  }
+
+  // Real-time moves: one request in flight, newer commands replace queued ones.
+  let moveBusy = false;
+  let moveNext = null;
+  function sendMove(m) {
+    if (!handy.connected || !isLive()) return;
+    if (moveBusy) {
+      moveNext = m;
+      return;
+    }
+    const duration = m.duration - (Date.now() - m.created);
+    if (duration < 40) return;
+    moveBusy = true;
+    bg('move', { position: m.position, duration })
+      .then(() => {
+        if (handy.lastError) {
+          handy.lastError = '';
+          ui.setHandyStatus('Connected · real-time', 'on');
+        }
+      })
+      .catch((e) => {
+        handy.lastError = e.message;
+        ui.setHandyStatus(e.message, 'err');
+      })
+      .finally(() => {
+        moveBusy = false;
+        if (moveNext) {
+          const n = moveNext;
+          moveNext = null;
+          sendMove(n);
+        }
+      });
+  }
+
   // ------------------------------------------------------------ script --
 
   function recompute() {
@@ -2030,6 +2634,7 @@ details summary { cursor: pointer; color: #9a9aab; font-size: 12px; text-transfo
     if (rec && rec.imported) cur.actions = rec.imported;
     else if (rec && rec.signal) cur.actions = motion.generateActions(motion.unpackSignal(rec.signal), params());
     else cur.actions = null;
+    updateMode();
     refreshScriptStatus();
     scheduleHandyLoad();
   }
@@ -2044,10 +2649,14 @@ details summary { cursor: pointer; color: #9a9aab; font-size: 12px; text-transfo
     ui.setVideoReady(!!v && !cur.scanning);
     if (cur.scanning) return;
     if (!v) return ui.setScriptStatus('Looking for the video…');
+    if (isLive()) {
+      ui.setScriptStatus((liveEngine && liveEngine.failed) || liveStatus || 'Real-time · press play');
+      return;
+    }
     if (!has) {
       if (rec && rec.signal) return ui.setScriptStatus('No clear motion found. Try higher sensitivity.');
       return ui.setScriptStatus(
-        dur ? 'No script yet. Tap "Generate AI script" (' + ui.fmtTime(dur / (settings.scanRate || 4)) + ' at ' + settings.scanRate + '×).' : 'Press play once so the video loads, then generate.'
+        dur ? 'No script yet. Press play for real-time, or pre-scan ('  + ui.fmtTime(dur / (settings.scanRate || 4)) + ' at ' + settings.scanRate + '×).' : 'Press play once so the video loads, then generate.'
       );
     }
     const st = fs.stats(cur.actions);
@@ -2068,6 +2677,7 @@ details summary { cursor: pointer; color: #9a9aab; font-size: 12px; text-transfo
     const resume = rec && (rec.scannedTo || 0) < dur - 1 && (rec.scannedFrom || 0) <= 0.5;
     const from = resume ? rec.scannedTo : 0;
     cur.scanning = true;
+    updateMode();
     cur.abort = new AbortController();
     ui.setScanning(true);
     ui.setVideoReady(false);
@@ -2101,6 +2711,7 @@ details summary { cursor: pointer; color: #9a9aab; font-size: 12px; text-transfo
       cur.scanning = false;
       cur.abort = null;
       ui.setScanning(false);
+      updateMode();
       refreshScriptStatus();
       syncPlayback();
     }
@@ -2183,6 +2794,7 @@ details summary { cursor: pointer; color: #9a9aab; font-size: 12px; text-transfo
     ui.setHandyStatus('Connecting…', 'busy');
     try {
       const r = await bg('connect');
+      handy.rtt = r.rtt || 0;
       handy.connected = true;
       handy.loadedHash = null;
       ui.setConnected(true);
@@ -2210,6 +2822,11 @@ details summary { cursor: pointer; color: #9a9aab; font-size: 12px; text-transfo
 
   async function handyLoad() {
     if (!handy.connected) return;
+    if (isLive()) {
+      handy.loadedHash = null;
+      ui.setHandyStatus('Connected · real-time mode. Press play.', 'on');
+      return;
+    }
     const actions = cur.actions;
     if (!actions || !actions.length) {
       ui.setHandyStatus('Connected · waiting for a script', 'on');
@@ -2248,6 +2865,10 @@ details summary { cursor: pointer; color: #9a9aab; font-size: 12px; text-transfo
   const syncPlayback = debounce(() => {
     const v = cur.video;
     if (!handy.connected || cur.scanning || !v) return;
+    if (isLive()) {
+      if (handy.playing) stopHandy();
+      return;
+    }
     const ready = handy.loadedHash && handy.loadedHash === currentHash();
     const rateOk = Math.abs(v.playbackRate - 1) < 0.01;
     const shouldPlay = ready && rateOk && !v.paused && !v.ended && !v.seeking && v.readyState >= 3;
@@ -2283,6 +2904,8 @@ details summary { cursor: pointer; color: #9a9aab; font-size: 12px; text-transfo
     cur.video = video;
     cur.id = id;
     cur.rec = video ? await store.getVideo(id) : null;
+    liveStatus = '';
+    if (liveEngine) liveEngine.attach(video);
     if (video) VIDEO_EVENTS.forEach((ev) => video.addEventListener(ev, onVideoEvent));
     recompute();
     syncPlayback();
@@ -2327,6 +2950,18 @@ details summary { cursor: pointer; color: #9a9aab; font-size: 12px; text-transfo
     });
     ui.applySettings(settings);
 
+    liveEngine = HAI.createLiveEngine({
+      cloneHost: ui.cloneHost,
+      getParams: () => params(),
+      // Command -> server -> device, plus the user's offset (+ = earlier).
+      getLatencyMs: () => (handy.connected ? handy.rtt + 40 : 0) + (settings.offsetMs || 0),
+      onMove: (position, duration) => sendMove({ position, duration, created: Date.now() }),
+      onStatus: (text) => {
+        liveStatus = text;
+        if (isLive() && !cur.scanning) ui.setScriptStatus(text);
+      },
+    });
+
     // Settings changed elsewhere (options page / another tab).
     chrome.storage.onChanged.addListener((changes, area) => {
       if (area !== 'local' || !changes.settings) return;
@@ -2354,7 +2989,8 @@ details summary { cursor: pointer; color: #9a9aab; font-size: 12px; text-transfo
     // Playhead graph.
     setInterval(() => {
       if (document.hidden || !cur.video) return;
-      ui.draw(cur.actions, cur.video.currentTime * 1000, durationOf(cur.video) * 1000);
+      const acts = isLive() && liveEngine ? liveEngine.actions() : cur.actions;
+      ui.draw(acts, cur.video.currentTime * 1000, durationOf(cur.video) * 1000);
     }, 100);
 
     if (settings.autoConnect && settings.connectionKey) connectHandy(true);

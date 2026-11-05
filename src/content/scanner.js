@@ -91,6 +91,7 @@
       let finished = false;
       const recentDt = [];
       let reseeking = false;
+      let block = { idx: 0, t: from, gray: null }; // last point known to be sampled densely enough
 
       const finish = (err) => {
         if (finished) return;
@@ -133,17 +134,20 @@
           samples.cut.push(true);
         }
         // Adaptive speed: if the device can't present enough frames at this
-        // rate (slow phone, dropped frames), halve it. Changing rate makes
-        // Chromium briefly deliver frames out of order, so let it settle and
-        // start a new segment afterwards.
+        // rate (slow phone, dropped frames, low-refresh screen), halve it.
+        // The too-sparse block is thrown away and re-scanned at the new rate,
+        // resuming from the last good frame so motion stays continuous.
         if (lastT >= 0 && t > lastT) {
           recentDt.push(t - lastT);
-          if (recentDt.length >= 24) {
-            const med = recentDt.slice().sort((x, y) => x - y)[12];
+          if (recentDt.length >= 12) {
+            const med = recentDt.slice().sort((x, y) => x - y)[6];
             recentDt.length = 0;
             if (med > TARGET_DT * 1.3 && video.playbackRate > 1) {
-              // Pause, slow down, step back to the last sampled frame and
-              // resume, so motion stays continuous across the switch.
+              samples.t.length = block.idx;
+              samples.feat.length = block.idx;
+              samples.cut.length = block.idx;
+              prev = block.gray;
+              lastT = block.idx ? block.t : -1;
               reseeking = true;
               video.pause();
               video.playbackRate = Math.max(1, video.playbackRate / 2);
@@ -154,9 +158,11 @@
                 if (!finished && !document.hidden) video.play().catch(() => {});
               };
               video.addEventListener('seeked', resume);
-              video.currentTime = lastT;
+              video.currentTime = block.idx ? block.t : from;
               return;
             }
+            // This block was fine: it becomes the rewind point.
+            block = { idx: samples.t.length, t, gray };
           }
         }
         prev = gray;
@@ -313,5 +319,5 @@
     }
   }
 
-  HAI.scanner = { scan, CancelledError };
+  HAI.scanner = { scan, CancelledError, frameLoop };
 })(typeof globalThis !== 'undefined' ? globalThis : this);

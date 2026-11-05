@@ -12,10 +12,12 @@ const parts = [
   'userscript/shim.js',
   'src/shared/funscript.js',
   'src/shared/motion.js',
+  'src/shared/live.js',
   'src/shared/handy.js',
   'src/background.js',
   'src/content/store.js',
   'src/content/scanner.js',
+  'src/content/live.js',
   'src/content/panel.js',
   'src/content/main.js',
 ];

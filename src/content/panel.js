@@ -82,8 +82,9 @@ details summary { cursor: pointer; color: #9a9aab; font-size: 12px; text-transfo
     <div class="preview"></div>
     <canvas class="graph" width="600" height="144"></canvas>
     <canvas class="heat" width="600" height="20"></canvas>
+    <div class="hint">Works in real time as you watch, and after seeking anywhere. Pre-scanning is optional and gives tighter sync.</div>
     <div class="row">
-      <button class="b primary grow" data-a="scan">Generate AI script</button>
+      <button class="b primary grow" data-a="scan">Pre-scan whole video</button>
       <button class="b" data-a="cancel" hidden>Stop</button>
     </div>
     <div class="row">
@@ -246,7 +247,7 @@ details summary { cursor: pointer; color: #9a9aab; font-size: 12px; text-transfo
       setHasScript(has, scannedAll) {
         btn('export').disabled = !has;
         btn('delete').disabled = !has;
-        btn('scan').textContent = has ? (scannedAll ? 'Re-scan video' : 'Continue scan') : 'Generate AI script';
+        btn('scan').textContent = has ? (scannedAll ? 'Re-scan video' : 'Continue pre-scan') : 'Pre-scan whole video';
       },
 
       setVideoReady(ready) {

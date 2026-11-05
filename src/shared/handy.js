@@ -18,6 +18,7 @@
     uploadUrl: 'https://www.handyfeeling.com/api/hosting/v2/upload',
   };
   const MODE_HSSP = 1;
+  const MODE_HDSP = 2; // direct position streaming (real-time mode)
 
   class HandyError extends Error {
     constructor(message, status) {
@@ -35,6 +36,7 @@
     let key = opts.connectionKey || '';
     let offset = opts.serverOffset || 0; // serverTime - localTime, ms
     let offsetAt = opts.serverOffsetAt || 0;
+    let mode = null; // last mode we set, to avoid a request per stroke
 
     async function call(method, path, body) {
       if (!key) throw new HandyError('Enter your Handy connection key first');
@@ -139,6 +141,7 @@
       /** Put the device in HSSP mode and have it download the script. */
       async setupScript(url) {
         await call('PUT', '/mode', { mode: MODE_HSSP });
+        mode = MODE_HSSP;
         const d = await call('PUT', '/hssp/setup', { url });
         if (typeof d.result === 'number' && d.result < 0) {
           throw new HandyError('Handy could not load the script (code ' + d.result + ')');
@@ -164,10 +167,27 @@
       async stop() {
         return call('PUT', '/hssp/stop');
       },
+
+      /**
+       * Real-time mode: move to `position` (0-100 %) taking `duration` ms.
+       * Uses HDSP; switches the device into that mode on first use.
+       */
+      async moveTo(position, duration) {
+        if (mode !== MODE_HDSP) {
+          await call('PUT', '/mode', { mode: MODE_HDSP });
+          mode = MODE_HDSP;
+        }
+        return call('PUT', '/hdsp/xpt', {
+          stopOnTarget: true,
+          immediateResponse: true,
+          position: Math.max(0, Math.min(100, Math.round(position))),
+          duration: Math.max(1, Math.round(duration)),
+        });
+      },
     };
   }
 
-  const api = { createHandyClient, HandyError, DEFAULTS, MODE_HSSP };
+  const api = { createHandyClient, HandyError, DEFAULTS, MODE_HSSP, MODE_HDSP };
   HAI.handy = api;
   if (typeof module !== 'undefined' && module.exports) module.exports = api;
 })(typeof globalThis !== 'undefined' ? globalThis : this);

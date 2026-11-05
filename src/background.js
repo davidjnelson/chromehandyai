@@ -109,6 +109,11 @@ const handlers = {
     await c.stop();
     return {};
   },
+  async move(msg) {
+    const c = await getClient();
+    await c.moveTo(msg.position, msg.duration);
+    return {};
+  },
 };
 
 chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {

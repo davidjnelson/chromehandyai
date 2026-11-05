@@ -19,7 +19,9 @@
     scanning: false,
     abort: null,
   };
-  const handy = { connected: false, loadedHash: null, loading: null, playing: false, lastError: '' };
+  const handy = { connected: false, loadedHash: null, loading: null, playing: false, lastError: '', rtt: 0 };
+  let liveEngine = null;
+  let liveStatus = '';
 
   // ------------------------------------------------------------ helpers --
 
@@ -82,6 +84,59 @@
     return v && Number.isFinite(v.duration) ? v.duration : 0;
   }
 
+  // ------------------------------------------------------------ modes --
+
+  /** A finished script (full scan or import) uses HSSP; otherwise real-time. */
+  function hasFullScript() {
+    const rec = cur.rec;
+    if (!rec || !cur.actions || !cur.actions.length) return false;
+    if (rec.imported) return true;
+    const dur = durationOf(cur.video) || rec.duration || 0;
+    return (rec.scannedTo || 0) >= dur - 1;
+  }
+
+  function isLive() {
+    return !hasFullScript();
+  }
+
+  function updateMode() {
+    if (!liveEngine) return;
+    liveEngine.setEnabled(!!cur.video && !cur.scanning && isLive());
+  }
+
+  // Real-time moves: one request in flight, newer commands replace queued ones.
+  let moveBusy = false;
+  let moveNext = null;
+  function sendMove(m) {
+    if (!handy.connected || !isLive()) return;
+    if (moveBusy) {
+      moveNext = m;
+      return;
+    }
+    const duration = m.duration - (Date.now() - m.created);
+    if (duration < 40) return;
+    moveBusy = true;
+    bg('move', { position: m.position, duration })
+      .then(() => {
+        if (handy.lastError) {
+          handy.lastError = '';
+          ui.setHandyStatus('Connected · real-time', 'on');
+        }
+      })
+      .catch((e) => {
+        handy.lastError = e.message;
+        ui.setHandyStatus(e.message, 'err');
+      })
+      .finally(() => {
+        moveBusy = false;
+        if (moveNext) {
+          const n = moveNext;
+          moveNext = null;
+          sendMove(n);
+        }
+      });
+  }
+
   // ------------------------------------------------------------ script --
 
   function recompute() {
@@ -89,6 +144,7 @@
     if (rec && rec.imported) cur.actions = rec.imported;
     else if (rec && rec.signal) cur.actions = motion.generateActions(motion.unpackSignal(rec.signal), params());
     else cur.actions = null;
+    updateMode();
     refreshScriptStatus();
     scheduleHandyLoad();
   }
@@ -103,10 +159,14 @@
     ui.setVideoReady(!!v && !cur.scanning);
     if (cur.scanning) return;
     if (!v) return ui.setScriptStatus('Looking for the video…');
+    if (isLive()) {
+      ui.setScriptStatus((liveEngine && liveEngine.failed) || liveStatus || 'Real-time · press play');
+      return;
+    }
     if (!has) {
       if (rec && rec.signal) return ui.setScriptStatus('No clear motion found. Try higher sensitivity.');
       return ui.setScriptStatus(
-        dur ? 'No script yet. Tap "Generate AI script" (' + ui.fmtTime(dur / (settings.scanRate || 4)) + ' at ' + settings.scanRate + '×).' : 'Press play once so the video loads, then generate.'
+        dur ? 'No script yet. Press play for real-time, or pre-scan ('  + ui.fmtTime(dur / (settings.scanRate || 4)) + ' at ' + settings.scanRate + '×).' : 'Press play once so the video loads, then generate.'
       );
     }
     const st = fs.stats(cur.actions);
@@ -127,6 +187,7 @@
     const resume = rec && (rec.scannedTo || 0) < dur - 1 && (rec.scannedFrom || 0) <= 0.5;
     const from = resume ? rec.scannedTo : 0;
     cur.scanning = true;
+    updateMode();
     cur.abort = new AbortController();
     ui.setScanning(true);
     ui.setVideoReady(false);
@@ -160,6 +221,7 @@
       cur.scanning = false;
       cur.abort = null;
       ui.setScanning(false);
+      updateMode();
       refreshScriptStatus();
       syncPlayback();
     }
@@ -242,6 +304,7 @@
     ui.setHandyStatus('Connecting…', 'busy');
     try {
       const r = await bg('connect');
+      handy.rtt = r.rtt || 0;
       handy.connected = true;
       handy.loadedHash = null;
       ui.setConnected(true);
@@ -269,6 +332,11 @@
 
   async function handyLoad() {
     if (!handy.connected) return;
+    if (isLive()) {
+      handy.loadedHash = null;
+      ui.setHandyStatus('Connected · real-time mode. Press play.', 'on');
+      return;
+    }
     const actions = cur.actions;
     if (!actions || !actions.length) {
       ui.setHandyStatus('Connected · waiting for a script', 'on');
@@ -307,6 +375,10 @@
   const syncPlayback = debounce(() => {
     const v = cur.video;
     if (!handy.connected || cur.scanning || !v) return;
+    if (isLive()) {
+      if (handy.playing) stopHandy();
+      return;
+    }
     const ready = handy.loadedHash && handy.loadedHash === currentHash();
     const rateOk = Math.abs(v.playbackRate - 1) < 0.01;
     const shouldPlay = ready && rateOk && !v.paused && !v.ended && !v.seeking && v.readyState >= 3;
@@ -342,6 +414,8 @@
     cur.video = video;
     cur.id = id;
     cur.rec = video ? await store.getVideo(id) : null;
+    liveStatus = '';
+    if (liveEngine) liveEngine.attach(video);
     if (video) VIDEO_EVENTS.forEach((ev) => video.addEventListener(ev, onVideoEvent));
     recompute();
     syncPlayback();
@@ -386,6 +460,18 @@
     });
     ui.applySettings(settings);
 
+    liveEngine = HAI.createLiveEngine({
+      cloneHost: ui.cloneHost,
+      getParams: () => params(),
+      // Command -> server -> device, plus the user's offset (+ = earlier).
+      getLatencyMs: () => (handy.connected ? handy.rtt + 40 : 0) + (settings.offsetMs || 0),
+      onMove: (position, duration) => sendMove({ position, duration, created: Date.now() }),
+      onStatus: (text) => {
+        liveStatus = text;
+        if (isLive() && !cur.scanning) ui.setScriptStatus(text);
+      },
+    });
+
     // Settings changed elsewhere (options page / another tab).
     chrome.storage.onChanged.addListener((changes, area) => {
       if (area !== 'local' || !changes.settings) return;
@@ -413,7 +499,8 @@
     // Playhead graph.
     setInterval(() => {
       if (document.hidden || !cur.video) return;
-      ui.draw(cur.actions, cur.video.currentTime * 1000, durationOf(cur.video) * 1000);
+      const acts = isLive() && liveEngine ? liveEngine.actions() : cur.actions;
+      ui.draw(acts, cur.video.currentTime * 1000, durationOf(cur.video) * 1000);
     }, 100);
 
     if (settings.autoConnect && settings.connectionKey) connectHandy(true);
