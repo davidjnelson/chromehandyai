@@ -1,0 +1,45 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Handy AI Scripts</title>
+<link rel="stylesheet" href="options.css">
+</head>
+<body>
+  <main>
+    <h1>Handy AI Scripts</h1>
+    <p class="lead">Open any video on Pornhub and tap the <b>H·AI</b> button in the corner to generate a script.</p>
+
+    <form id="form" autocomplete="off">
+      <label for="connectionKey">The Handy connection key</label>
+      <div class="row">
+        <input id="connectionKey" type="password" spellcheck="false" autocapitalize="off" placeholder="e.g. aBcD1234">
+        <button type="button" id="toggleKey" class="ghost" aria-label="Show key">Show</button>
+      </div>
+      <p class="hint">Find it in the Handy app or on handyfeeling.com. The device must be on Wi-Fi.</p>
+
+      <label class="check"><input id="autoConnect" type="checkbox"> Connect automatically when a video opens</label>
+
+      <div class="row">
+        <button type="submit" class="primary">Save</button>
+        <button type="button" id="test">Test connection</button>
+      </div>
+      <p id="status" class="status" role="status"></p>
+
+      <details>
+        <summary>Advanced</summary>
+        <label for="apiBase">Handy API base URL</label>
+        <input id="apiBase" type="url" placeholder="https://www.handyfeeling.com/api/handy/v2">
+        <label for="uploadUrl">Script upload URL</label>
+        <input id="uploadUrl" type="url" placeholder="https://www.handyfeeling.com/api/hosting/v2/upload">
+        <p class="hint">Leave empty for the defaults. Only change these if The Handy moves its API.</p>
+        <button type="button" id="clearData" class="danger">Delete all saved scripts</button>
+      </details>
+    </form>
+  </main>
+  <script src="../shared/funscript.js"></script>
+  <script src="../content/store.js"></script>
+  <script src="options.js"></script>
+</body>
+</html>

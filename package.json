@@ -1,0 +1,16 @@
+{
+  "name": "handy-ai-scripts",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Browser extension: motion-analysis stroker scripts for Pornhub videos, synced to The Handy.",
+  "scripts": {
+    "test": "node --test test/unit/*.test.js",
+    "test:e2e": "node test/e2e/run.js",
+    "lint": "eslint src test tools",
+    "icons": "node tools/make-icons.js",
+    "package": "node tools/package.js"
+  },
+  "devDependencies": {
+    "playwright": "^1.63.0"
+  }
+}

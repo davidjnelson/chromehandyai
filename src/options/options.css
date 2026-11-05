@@ -1,0 +1,21 @@
+:root { color-scheme: dark; }
+* { box-sizing: border-box; }
+body { margin: 0; background: #16161c; color: #ececf1; font: 15px/1.4 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; min-width: 320px; }
+main { max-width: 520px; margin: 0 auto; padding: 16px; }
+h1 { font-size: 18px; margin: 0 0 6px; }
+.lead { color: #c9c9d4; margin: 0 0 16px; }
+label { display: block; margin: 12px 0 6px; color: #c9c9d4; font-weight: 600; font-size: 13px; }
+label.check { display: flex; gap: 8px; align-items: center; font-weight: 400; font-size: 14px; min-height: 40px; }
+input[type=password], input[type=text], input[type=url] { width: 100%; min-height: 42px; border-radius: 9px; border: 1px solid #3a3a46; background: #0e0e12; color: #fff; padding: 0 10px; font-size: 15px; }
+input[type=checkbox] { width: 20px; height: 20px; accent-color: #7c5cff; }
+.row { display: flex; gap: 8px; align-items: center; margin: 8px 0; }
+.row input { flex: 1; min-width: 0; }
+button { min-height: 42px; padding: 0 16px; border-radius: 9px; border: 1px solid #3a3a46; background: #23232c; color: #ececf1; font-weight: 600; font-size: 14px; cursor: pointer; }
+button.primary { background: #7c5cff; border-color: #7c5cff; color: #fff; }
+button.ghost { background: none; }
+button.danger { color: #ff8a8a; margin-top: 12px; }
+.hint { color: #8a8a99; font-size: 12px; margin: 4px 0; }
+.status { min-height: 1.4em; color: #c9c9d4; }
+.status.ok { color: #2fd27a; } .status.err { color: #ff7a7a; }
+details { margin-top: 16px; border-top: 1px solid #2a2a33; padding-top: 8px; }
+summary { cursor: pointer; color: #9a9aab; font-size: 12px; text-transform: uppercase; letter-spacing: .06em; font-weight: 600; padding: 6px 0; }
