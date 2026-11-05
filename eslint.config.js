@@ -4,7 +4,7 @@ const browserGlobals = {
   console: 'readonly', setTimeout: 'readonly', clearTimeout: 'readonly', setInterval: 'readonly', clearInterval: 'readonly',
   requestAnimationFrame: 'readonly', cancelAnimationFrame: 'readonly', performance: 'readonly', location: 'readonly',
   URL: 'readonly', Blob: 'readonly', FormData: 'readonly', fetch: 'readonly', crypto: 'readonly', TextEncoder: 'readonly',
-  AbortController: 'readonly', HTMLVideoElement: 'readonly', Event: 'readonly', confirm: 'readonly',
+  AbortController: 'readonly', localStorage: 'readonly', Buffer: 'readonly', HTMLVideoElement: 'readonly', Event: 'readonly', confirm: 'readonly',
   module: 'writable', require: 'readonly', process: 'readonly', __dirname: 'readonly',
 };
 module.exports = [

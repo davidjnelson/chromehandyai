@@ -39,7 +39,13 @@ The same manifest works in Firefox 128+. On desktop, use `about:debugging` → *
 **Google Chrome on Android and iOS does not run extensions at all.** No Chrome extension can work in mobile Chrome. To use this on a phone:
 
 - **Android:** use **Firefox for Android**, or a Chromium-based browser that can install Chrome extensions (for example Edge, where your version allows it, or another extension-capable Chromium browser).
-- **iOS:** Safari extensions must be wrapped in an Xcode app (`xcrun safari-web-extension-converter`). That should work in principle but hasn't been tried with this project.
+- **iPhone / iPad:** use the userscript build, `userscript/handy-ai-scripts.user.js`, with the free **Userscripts** app for Safari:
+  1. Install **Userscripts** from the App Store and open it once to pick its scripts folder.
+  2. Turn it on: Settings → Apps → Safari → Extensions → Userscripts → allow it, and set the websites option to *Allow*.
+  3. In Safari, open the `.user.js` file (GitHub → file → *Raw*). Tap the extensions icon in the address bar → Userscripts → **Install**. Or save the file into the app's scripts folder in Files.
+  4. Open a video, press play once, tap **H·AI**, enter your connection key, then **Generate AI script**.
+
+  Run `npm run build:userscript` after changing the sources. `npm run test:userscript` tests it in Chromium with a fake userscript API.
 
 The in-page panel is built for touch. It becomes a bottom sheet on narrow screens, with 40 px+ controls:
 
