@@ -2,7 +2,7 @@
   "manifest_version": 3,
   "name": "Handy AI Scripts",
   "short_name": "Handy AI",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "description": "Generates stroker scripts from video motion on Pornhub and syncs them to The Handy. Also imports and exports .funscript files.",
   "minimum_chrome_version": "121",
   "icons": {

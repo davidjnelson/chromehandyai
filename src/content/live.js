@@ -34,6 +34,11 @@
     let lastPos = 50;
     let history = []; // recent turning points {at, pos} for the graph
     let statusAt = 0;
+    // Diagnostics: are frames arriving, and do they contain a picture?
+    let lastFrameWall = 0;
+    let goodFrames = 0;
+    let blankFrames = 0;
+    let watchdog = 0;
     const tracker = live.createLiveTracker();
     const rhythm = live.createRhythm();
 
@@ -83,6 +88,23 @@
         return;
       }
       const gray = motion.toGray(img.data, new Uint8Array(canvas.width * canvas.height));
+      lastFrameWall = Date.now();
+      let lo = 255;
+      let hi = 0;
+      for (let i = 0; i < gray.length; i += 7) {
+        if (gray[i] < lo) lo = gray[i];
+        if (gray[i] > hi) hi = gray[i];
+      }
+      if (hi - lo < 6) {
+        // Browser handed us an empty (black/flat) picture.
+        blankFrames++;
+        if (!goodFrames && blankFrames > 40) {
+          failed = 'Real-time · this browser gives a blank video picture, so motion can’t be seen. Pre-scan won’t work either; try Import.';
+          status(failed, true);
+        }
+        return;
+      }
+      goodFrames++;
       if (!prev) {
         prev = gray;
         lastT = t;
@@ -234,6 +256,13 @@
     return {
       attach(v) {
         this.detach();
+        clearInterval(watchdog);
+        watchdog = setInterval(() => {
+          if (!enabled || !video || video.paused || video.seeking || failed) return;
+          if (Date.now() - lastFrameWall > 4000 && video.currentTime > 1) {
+            status('Real-time · not receiving video frames from the browser (' + (goodFrames + blankFrames) + ' so far).', true);
+          }
+        }, 2000);
         video = v;
         src = v;
         failed = '';

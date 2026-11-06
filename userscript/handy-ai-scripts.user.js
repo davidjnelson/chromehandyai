@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Handy AI Scripts
 // @namespace    https://github.com/davidjnelson/chromehandyai
-// @version      0.2.0
+// @version      0.2.1
 // @description  Generates stroker scripts from video motion on Pornhub and syncs them to The Handy. Also imports and exports .funscript files.
 // @match        *://*.pornhub.com/view_video.php*
 // @match        *://*.pornhub.com/embed/*
@@ -1925,6 +1925,11 @@ chrome.runtime.onStartup &&
     let lastPos = 50;
     let history = []; // recent turning points {at, pos} for the graph
     let statusAt = 0;
+    // Diagnostics: are frames arriving, and do they contain a picture?
+    let lastFrameWall = 0;
+    let goodFrames = 0;
+    let blankFrames = 0;
+    let watchdog = 0;
     const tracker = live.createLiveTracker();
     const rhythm = live.createRhythm();
 
@@ -1974,6 +1979,23 @@ chrome.runtime.onStartup &&
         return;
       }
       const gray = motion.toGray(img.data, new Uint8Array(canvas.width * canvas.height));
+      lastFrameWall = Date.now();
+      let lo = 255;
+      let hi = 0;
+      for (let i = 0; i < gray.length; i += 7) {
+        if (gray[i] < lo) lo = gray[i];
+        if (gray[i] > hi) hi = gray[i];
+      }
+      if (hi - lo < 6) {
+        // Browser handed us an empty (black/flat) picture.
+        blankFrames++;
+        if (!goodFrames && blankFrames > 40) {
+          failed = 'Real-time · this browser gives a blank video picture, so motion can’t be seen. Pre-scan won’t work either; try Import.';
+          status(failed, true);
+        }
+        return;
+      }
+      goodFrames++;
       if (!prev) {
         prev = gray;
         lastT = t;
@@ -2125,6 +2147,13 @@ chrome.runtime.onStartup &&
     return {
       attach(v) {
         this.detach();
+        clearInterval(watchdog);
+        watchdog = setInterval(() => {
+          if (!enabled || !video || video.paused || video.seeking || failed) return;
+          if (Date.now() - lastFrameWall > 4000 && video.currentTime > 1) {
+            status('Real-time · not receiving video frames from the browser (' + (goodFrames + blankFrames) + ' so far).', true);
+          }
+        }, 2000);
         video = v;
         src = v;
         failed = '';
@@ -2278,6 +2307,7 @@ details summary { cursor: pointer; color: #9a9aab; font-size: 12px; text-transfo
     <div class="hint">Firmware 4 Handy? Get a free Application ID at <a href="https://user.handyfeeling.com" target="_blank" rel="noopener">user.handyfeeling.com</a> and paste it here once.</div>
     <div class="row">
       <button class="b primary grow" data-a="connect">Connect</button>
+      <button class="b" data-a="test" disabled>Test</button>
     </div>
     <label class="f">Timing offset <input type="range" data-s="offsetMs" min="-500" max="500" step="10"><output></output></label>
     <div class="hint">Positive = strokes earlier. Use if the device lags the video.</div>
@@ -2357,6 +2387,7 @@ details summary { cursor: pointer; color: #9a9aab; font-size: 12px; text-transfo
     btn('delete').addEventListener('click', () => handlers.onDelete());
     btn('import').addEventListener('click', () => fileInput.click());
     btn('connect').addEventListener('click', () => (connected ? handlers.onDisconnect() : handlers.onConnect()));
+    btn('test').addEventListener('click', () => handlers.onTest && handlers.onTest());
     fileInput.addEventListener('change', async () => {
       const f = fileInput.files && fileInput.files[0];
       fileInput.value = '';
@@ -2415,6 +2446,7 @@ details summary { cursor: pointer; color: #9a9aab; font-size: 12px; text-transfo
 
       setConnected(on) {
         connected = on;
+        btn('test').disabled = !on;
         btn('connect').textContent = on ? 'Disconnect' : 'Connect';
         btn('connect').classList.toggle('primary', !on);
       },
@@ -2664,9 +2696,10 @@ details summary { cursor: pointer; color: #9a9aab; font-size: 12px; text-transfo
     moveBusy = true;
     bg('move', { position: m.position, duration })
       .then(() => {
-        if (handy.lastError) {
+        handy.moves = (handy.moves || 0) + 1;
+        if (handy.lastError || handy.moves === 1) {
           handy.lastError = '';
-          ui.setHandyStatus('Connected · real-time', 'on');
+          ui.setHandyStatus('Moving with the video (real-time)', 'on');
         }
       })
       .catch((e) => {
@@ -2864,6 +2897,24 @@ details summary { cursor: pointer; color: #9a9aab; font-size: 12px; text-transfo
     }
   }
 
+  /** Move the device directly, without any video: tells device problems apart from video problems. */
+  async function testHandy() {
+    if (!handy.connected) return;
+    if (handy.playing) stopHandy();
+    ui.setHandyStatus('Test: moving the Handy…', 'busy');
+    try {
+      for (const position of [90, 10, 90, 10, 50]) {
+        await bg('move', { position, duration: 450 });
+        await new Promise((r) => setTimeout(r, 500));
+      }
+      handy.loadedHash = null; // device left script mode; reload if needed
+      ui.setHandyStatus('Test sent. Did it move? If yes, the device works; check the Script line above.', 'on');
+      scheduleHandyLoad();
+    } catch (e) {
+      ui.setHandyStatus('Test failed: ' + e.message, 'err');
+    }
+  }
+
   function disconnectHandy() {
     if (handy.playing) stopHandy();
     handy.connected = false;
@@ -2978,6 +3029,7 @@ details summary { cursor: pointer; color: #9a9aab; font-size: 12px; text-transfo
       onExport: doExport,
       onDelete: doDelete,
       onConnect: () => connectHandy(false),
+      onTest: testHandy,
       onDisconnect: disconnectHandy,
       onSetting: async (key, value, { live }) => {
         settings[key] = value;

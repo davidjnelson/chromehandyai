@@ -118,9 +118,10 @@
     moveBusy = true;
     bg('move', { position: m.position, duration })
       .then(() => {
-        if (handy.lastError) {
+        handy.moves = (handy.moves || 0) + 1;
+        if (handy.lastError || handy.moves === 1) {
           handy.lastError = '';
-          ui.setHandyStatus('Connected · real-time', 'on');
+          ui.setHandyStatus('Moving with the video (real-time)', 'on');
         }
       })
       .catch((e) => {
@@ -318,6 +319,24 @@
     }
   }
 
+  /** Move the device directly, without any video: tells device problems apart from video problems. */
+  async function testHandy() {
+    if (!handy.connected) return;
+    if (handy.playing) stopHandy();
+    ui.setHandyStatus('Test: moving the Handy…', 'busy');
+    try {
+      for (const position of [90, 10, 90, 10, 50]) {
+        await bg('move', { position, duration: 450 });
+        await new Promise((r) => setTimeout(r, 500));
+      }
+      handy.loadedHash = null; // device left script mode; reload if needed
+      ui.setHandyStatus('Test sent. Did it move? If yes, the device works; check the Script line above.', 'on');
+      scheduleHandyLoad();
+    } catch (e) {
+      ui.setHandyStatus('Test failed: ' + e.message, 'err');
+    }
+  }
+
   function disconnectHandy() {
     if (handy.playing) stopHandy();
     handy.connected = false;
@@ -432,6 +451,7 @@
       onExport: doExport,
       onDelete: doDelete,
       onConnect: () => connectHandy(false),
+      onTest: testHandy,
       onDisconnect: disconnectHandy,
       onSetting: async (key, value, { live }) => {
         settings[key] = value;

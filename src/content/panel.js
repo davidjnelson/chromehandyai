@@ -102,6 +102,7 @@ details summary { cursor: pointer; color: #9a9aab; font-size: 12px; text-transfo
     <div class="hint">Firmware 4 Handy? Get a free Application ID at <a href="https://user.handyfeeling.com" target="_blank" rel="noopener">user.handyfeeling.com</a> and paste it here once.</div>
     <div class="row">
       <button class="b primary grow" data-a="connect">Connect</button>
+      <button class="b" data-a="test" disabled>Test</button>
     </div>
     <label class="f">Timing offset <input type="range" data-s="offsetMs" min="-500" max="500" step="10"><output></output></label>
     <div class="hint">Positive = strokes earlier. Use if the device lags the video.</div>
@@ -181,6 +182,7 @@ details summary { cursor: pointer; color: #9a9aab; font-size: 12px; text-transfo
     btn('delete').addEventListener('click', () => handlers.onDelete());
     btn('import').addEventListener('click', () => fileInput.click());
     btn('connect').addEventListener('click', () => (connected ? handlers.onDisconnect() : handlers.onConnect()));
+    btn('test').addEventListener('click', () => handlers.onTest && handlers.onTest());
     fileInput.addEventListener('change', async () => {
       const f = fileInput.files && fileInput.files[0];
       fileInput.value = '';
@@ -239,6 +241,7 @@ details summary { cursor: pointer; color: #9a9aab; font-size: 12px; text-transfo
 
       setConnected(on) {
         connected = on;
+        btn('test').disabled = !on;
         btn('connect').textContent = on ? 'Disconnect' : 'Connect';
         btn('connect').classList.toggle('primary', !on);
       },
