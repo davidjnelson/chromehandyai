@@ -5,6 +5,7 @@
 
   const DEFAULT_SETTINGS = {
     connectionKey: '',
+    appId: '', // Handy API v3 Application ID (firmware 4 devices)
     autoConnect: true,
     minPos: 0,
     maxPos: 100,

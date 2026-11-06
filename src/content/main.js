@@ -435,9 +435,9 @@
       onDisconnect: disconnectHandy,
       onSetting: async (key, value, { live }) => {
         settings[key] = value;
-        if (key === 'connectionKey') {
+        if (key === 'connectionKey' || key === 'appId') {
           if (!live) {
-            await store.saveSettings({ connectionKey: value });
+            await store.saveSettings({ [key]: value });
             if (handy.connected) disconnectHandy();
           }
           return;
@@ -476,7 +476,7 @@
     chrome.storage.onChanged.addListener((changes, area) => {
       if (area !== 'local' || !changes.settings) return;
       const next = Object.assign({}, store.DEFAULT_SETTINGS, changes.settings.newValue || {});
-      const keyChanged = next.connectionKey !== settings.connectionKey;
+      const keyChanged = next.connectionKey !== settings.connectionKey || next.appId !== settings.appId;
       settings = next;
       ui.applySettings(settings);
       if (keyChanged && handy.connected) disconnectHandy();

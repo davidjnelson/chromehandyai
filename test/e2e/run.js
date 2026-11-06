@@ -107,6 +107,7 @@ async function clickShadow(page, predicate) {
   const { cdp, nodes } = await shadowNodes(page);
   const n = nodes.find(predicate);
   if (!n) throw new Error('shadow node not found');
+  await cdp.send('DOM.scrollIntoViewIfNeeded', { backendNodeId: n.backendNodeId }).catch(() => {});
   const { model } = await cdp.send('DOM.getBoxModel', { backendNodeId: n.backendNodeId });
   const q = model.content;
   await page.mouse.click((q[0] + q[4]) / 2, (q[1] + q[5]) / 2);
@@ -211,6 +212,7 @@ function checkScript(rec, label) {
 
     // Open the panel and generate.
     await clickShadow(page, (n) => attr(n, 'class') === 'fab');
+    await clickShadow(page, (n) => attr(n, 'data-o') === 'moreSummary'); // open "More"
     await clickShadow(page, (n) => attr(n, 'data-a') === 'scan');
     const t0 = Date.now();
     await page.waitForTimeout(2500);
@@ -295,6 +297,7 @@ function checkScript(rec, label) {
     });
     log('cross-origin player tainted:', tainted);
     await clickShadow(page2, (n) => attr(n, 'class') === 'fab');
+    await clickShadow(page2, (n) => attr(n, 'data-o') === 'moreSummary');
     await clickShadow(page2, (n) => attr(n, 'data-a') === 'scan');
     const rec2 = await waitFor(() => getRec('e2e2'), 60000, 'clone scan result');
     log('clone used a CORS request:', !!sawCors);

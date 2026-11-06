@@ -19,3 +19,4 @@ button.danger { color: #ff8a8a; margin-top: 12px; }
 .status.ok { color: #2fd27a; } .status.err { color: #ff7a7a; }
 details { margin-top: 16px; border-top: 1px solid #2a2a33; padding-top: 8px; }
 summary { cursor: pointer; color: #9a9aab; font-size: 12px; text-transform: uppercase; letter-spacing: .06em; font-weight: 600; padding: 6px 0; }
+a { color: #b9a8ff; }

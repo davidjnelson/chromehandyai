@@ -10,6 +10,7 @@
 
   const s = await store.getSettings();
   $('connectionKey').value = s.connectionKey;
+  $('appId').value = s.appId || '';
   $('autoConnect').checked = !!s.autoConnect;
   $('apiBase').value = s.apiBase || '';
   $('uploadUrl').value = s.uploadUrl || '';
@@ -17,6 +18,7 @@
   async function save() {
     await store.saveSettings({
       connectionKey: $('connectionKey').value.trim(),
+      appId: $('appId').value.trim(),
       autoConnect: $('autoConnect').checked,
       apiBase: $('apiBase').value.trim(),
       uploadUrl: $('uploadUrl').value.trim(),

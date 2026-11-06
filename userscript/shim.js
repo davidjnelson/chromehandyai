@@ -149,7 +149,9 @@ async function fetch(url, init) {
       data,
       timeout: 20000,
       onload: (r) => {
-        const text = r.responseText !== undefined ? r.responseText : r.response;
+        let text = typeof r.responseText === 'string' ? r.responseText : r.response;
+        if (text && typeof text !== 'string') text = JSON.stringify(text); // some managers pre-parse JSON
+        if (text === undefined || text === null) text = '';
         resolve({
           ok: r.status >= 200 && r.status < 300,
           status: r.status,

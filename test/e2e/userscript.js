@@ -55,6 +55,7 @@ async function clickShadow(page, attrName, value) {
   };
   walk(root);
   if (!found) throw new Error('not found ' + value);
+  await cdp.send('DOM.scrollIntoViewIfNeeded', { backendNodeId: found.backendNodeId }).catch(() => {});
   const { model } = await cdp.send('DOM.getBoxModel', { backendNodeId: found.backendNodeId });
   const q = model.content;
   await page.mouse.click((q[0] + q[4]) / 2, (q[1] + q[5]) / 2);
@@ -105,6 +106,7 @@ async function clickShadow(page, attrName, value) {
     };
     await until(() => fake.calls.find((c) => c.path === '/connected'), 10000, 'connect via GM.xmlHttpRequest');
     await clickShadow(page, 'class', 'fab');
+    await clickShadow(page, 'data-o', 'moreSummary');
     await clickShadow(page, 'data-a', 'scan');
     await until(() => store['handyai:video:ios1'], 60000, 'scan saved via GM.setValue');
     const rec = JSON.parse(store['handyai:video:ios1']);

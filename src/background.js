@@ -25,7 +25,7 @@ async function getSettings() {
 
 async function getClient() {
   const s = await getSettings();
-  const cfg = JSON.stringify([s.connectionKey || '', s.apiBase || '', s.uploadUrl || '']);
+  const cfg = JSON.stringify([s.connectionKey || '', s.appId || '', s.apiBase || '', s.uploadUrl || '']);
   if (!client || cfg !== clientConfig) {
     let session = {};
     try {
@@ -36,6 +36,7 @@ async function getClient() {
     client = createHandyClient({
       fetch: (...a) => fetch(...a),
       connectionKey: s.connectionKey,
+      appId: s.appId,
       apiBase: s.apiBase || undefined,
       uploadUrl: s.uploadUrl || undefined,
       serverOffset: session.key === s.connectionKey ? session.offset : 0,
@@ -85,7 +86,7 @@ const handlers = {
     const c = await getClient();
     const r = await c.connect();
     await saveClock(c);
-    return { rtt: Math.round(r.rtt), offset: Math.round(r.offset) };
+    return { rtt: Math.round(r.rtt), offset: Math.round(r.offset), api: c.version };
   },
   async status() {
     const c = await getClient();

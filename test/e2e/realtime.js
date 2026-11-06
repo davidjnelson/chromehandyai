@@ -24,7 +24,7 @@ function fakeHandy() {
   const server = http.createServer((req, res) => {
     const cors = {
       'Access-Control-Allow-Origin': '*',
-      'Access-Control-Allow-Headers': 'X-Connection-Key, Content-Type, Accept',
+      'Access-Control-Allow-Headers': 'X-Connection-Key, X-Api-Key, Content-Type, Accept',
       'Access-Control-Allow-Methods': 'GET, PUT, POST, OPTIONS',
     };
     if (req.method === 'OPTIONS') {
@@ -34,17 +34,19 @@ function fakeHandy() {
     let body = '';
     req.on('data', (c) => (body += c));
     req.on('end', () => {
-      const p = req.url.replace(/^\/api\/handy\/v2/, '');
-      const e = { path: p, at: Date.now() };
+      const p = req.url.replace(/^\/api\/handy-rest\/v3/, '');
+      const e = { path: p, at: Date.now(), appId: req.headers['x-api-key'], key: req.headers['x-connection-key'] };
       try {
         e.body = JSON.parse(body);
       } catch (err) {
         /* not json */
       }
       calls.push(e);
-      let data = { result: 0 };
-      if (p === '/connected') data = { connected: true };
-      if (p === '/servertime') data = { serverTime: Date.now() };
+      // API v3 response formats (official spec).
+      let data = { result: 'ok' };
+      if (p === '/connected') data = { result: { connected: true } };
+      if (p === '/servertime') data = { server_time: Date.now() };
+      if (p === '/mode2') data = { result: { mode: e.body && e.body.mode, mode_session_id: 1 } };
       res.writeHead(200, Object.assign({ 'Content-Type': 'application/json' }, cors));
       res.end(JSON.stringify(data));
     });
@@ -108,8 +110,9 @@ function phaseErr(t, isTop) {
     if (!sw) sw = await context.waitForEvent('serviceworker');
     await sw.evaluate((s) => chrome.storage.local.set({ settings: s }), {
       connectionKey: 'RTKEY',
+      appId: 'TESTAPPID',
       autoConnect: true,
-      apiBase: `http://127.0.0.1:${fake.port}/api/handy/v2`,
+      apiBase: `http://127.0.0.1:${fake.port}/api/handy-rest/v3`,
       uploadUrl: `http://127.0.0.1:${fake.port}/upload`,
     });
     await context.route('https://www.pornhub.com/**', (route) => {
@@ -147,7 +150,8 @@ function phaseErr(t, isTop) {
     await page.screenshot({ path: path.join(OUT, 'realtime-playing.png') });
 
     const moves = fake.calls.filter((c) => c.path === '/hdsp/xpt' && c.at > playAt);
-    assert.ok(fake.calls.some((c) => c.path === '/mode' && c.body && c.body.mode === 2), 'switched device to HDSP');
+    assert.ok(fake.calls.some((c) => c.path === '/mode2' && c.body && c.body.mode === 2), 'switched device to HDSP (v3 /mode2)');
+    assert.ok(fake.calls.every((c) => c.appId === 'TESTAPPID' && c.key === 'RTKEY'), 'v3 auth headers on every call');
     assert.ok(!fake.calls.some((c) => c.path === '/hssp/setup' || c.path === '/upload'), 'no pre-scan upload needed');
     log('moves received:', moves.length);
     const firstMove = moves[0] ? mediaAt(moves[0].at) : NaN;
@@ -157,10 +161,10 @@ function phaseErr(t, isTop) {
     // When does each move arrive? receipt + duration + the engine's latency
     // allowance (rtt + 40 ms; rtt is ~0 on localhost).
     const steady = moves.filter((m) => mediaAt(m.at) > 3);
-    fs.writeFileSync(path.join(OUT, 'realtime-moves.json'), JSON.stringify(moves.map((m) => ({ media: +mediaAt(m.at).toFixed(3), arrive: +(mediaAt(m.at) + (m.body.duration + 40) / 1000).toFixed(3), pos: m.body.position, dur: m.body.duration }))));
-    const errs = steady.map((m) => phaseErr(mediaAt(m.at) + (m.body.duration + 40) / 1000, m.body.position >= 50));
+    fs.writeFileSync(path.join(OUT, 'realtime-moves.json'), JSON.stringify(moves.map((m) => ({ media: +mediaAt(m.at).toFixed(3), arrive: +(mediaAt(m.at) + (m.body.t + 40) / 1000).toFixed(3), pos: m.body.xp, dur: m.body.t }))));
+    const errs = steady.map((m) => phaseErr(mediaAt(m.at) + (m.body.t + 40) / 1000, m.body.xp >= 50));
     const mean = errs.reduce((s, e) => s + e, 0) / errs.length;
-    const alternating = steady.filter((m, i) => i > 0 && (m.body.position >= 50) !== (steady[i - 1].body.position >= 50)).length / Math.max(1, steady.length - 1);
+    const alternating = steady.filter((m, i) => i > 0 && (m.body.xp >= 50) !== (steady[i - 1].body.xp >= 50)).length / Math.max(1, steady.length - 1);
     log(`steady moves ${steady.length} (expected ≈ ${(2 * F * (mediaAt(Date.now()) - 3)).toFixed(0)}), mean arrival error ${(mean * 1000).toFixed(0)} ms, alternating ${(alternating * 100).toFixed(0)}%`);
     assert.ok(steady.length >= 2 * F * 5, 'enough strokes');
     assert.ok(mean < 0.1, 'moves arrive at the turning points');

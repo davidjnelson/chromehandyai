@@ -7,7 +7,7 @@ A browser extension that makes stroker scripts for any video on Pornhub and play
 ## What it does
 
 1. On any `pornhub.com/view_video.php` or `/embed/` page, an **H·AI** button appears in the bottom-right corner.
-2. **Connect** your Handy with its connection key, then just **press play**. Real-time mode analyses the video as it plays and drives the device straight away. It starts within about 1.5 s, and re-locks about 1.3 s after you skip to a different part of the video. No waiting, no pre-scan.
+2. **Connect** your Handy, then just **press play**. You need your connection key. **Handy firmware 4 also needs a free Application ID:** sign in at [user.handyfeeling.com](https://user.handyfeeling.com), create an app, and paste its ID into the second box once. That's Handy's rule for API v3. Firmware 3 devices only need the key. Real-time mode analyses the video as it plays and drives the device straight away. It starts within about 1.5 s, and re-locks about 1.3 s after you skip to a different part of the video. No waiting, no pre-scan.
 3. Optional: **Pre-scan whole video** analyses the entire video ahead of time (fast, muted, up to 8×) for the tightest sync. Once a video is pre-scanned, or you import a `.funscript`, the extension switches to script mode for it automatically. Saved scripts make the next visit instant, and the **Tuning** sliders apply immediately.
 
 ### Real-time mode
@@ -80,7 +80,7 @@ Notes:
 
 ## The Handy API
 
-All Handy endpoints are in `src/shared/handy.js` and use **API v2** with HSSP:
+All Handy endpoints are in `src/shared/handy.js`. With an Application ID the client uses **API v3** (`/api/handy-rest/v3`, headers `X-Api-Key` and `X-Connection-Key`, formats from Handy's OpenAPI spec: `/connected` → `{result:{connected}}`, `/servertime` → `{server_time}`, `PUT /mode2`, `PUT /hssp/play {server_time, start_time}`, `PUT /hdsp/xpt {xp, t, stop_on_target}`). Without one it uses **API v2**:
 
 | Step | Call |
 |---|---|

@@ -9,6 +9,7 @@
 
   const CSS = `
 :host { all: initial; }
+[hidden] { display: none !important; }
 * { box-sizing: border-box; font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; }
 .fab {
   position: fixed; right: max(16px, env(safe-area-inset-right)); bottom: max(16px, env(safe-area-inset-bottom));
@@ -63,6 +64,7 @@ input[type=text], input[type=password], select {
 input[type=text], input[type=password] { flex: 1; min-width: 0; }
 label.c { display: flex; align-items: center; gap: 8px; min-height: 36px; color: #c9c9d4; }
 input[type=checkbox] { width: 20px; height: 20px; accent-color: #7c5cff; }
+a { color: #b9a8ff; }
 details summary { cursor: pointer; color: #9a9aab; font-size: 12px; text-transform: uppercase; letter-spacing: .06em;
   font-weight: 600; padding: 6px 0; list-style-position: inside; }
 .hint { color: #8a8a99; font-size: 12px; margin: 4px 0; }
@@ -82,16 +84,9 @@ details summary { cursor: pointer; color: #9a9aab; font-size: 12px; text-transfo
     <div class="preview"></div>
     <canvas class="graph" width="600" height="144"></canvas>
     <canvas class="heat" width="600" height="20"></canvas>
-    <div class="hint">Works in real time as you watch, and after seeking anywhere. Pre-scanning is optional and gives tighter sync.</div>
-    <div class="row">
-      <button class="b primary grow" data-a="scan">Pre-scan whole video</button>
-      <button class="b" data-a="cancel" hidden>Stop</button>
-    </div>
-    <div class="row">
-      <button class="b grow" data-a="import">Import</button>
-      <button class="b grow" data-a="export">Export</button>
-      <button class="b danger" data-a="delete" aria-label="Delete script">Delete</button>
-      <input type="file" accept=".funscript,application/json" hidden>
+    <div class="hint">Real time: just press play. Works after skipping around too.</div>
+    <div class="row" data-o="scanRow" hidden>
+      <button class="b" data-a="cancel">Stop pre-scan</button>
     </div>
   </section>
 
@@ -100,14 +95,31 @@ details summary { cursor: pointer; color: #9a9aab; font-size: 12px; text-transfo
     <div class="status" data-o="handyStatus">Not connected</div>
     <div class="row">
       <input type="password" data-s="connectionKey" placeholder="Connection key" autocomplete="off" autocapitalize="off" spellcheck="false">
-      <button class="b primary" data-a="connect">Connect</button>
+    </div>
+    <div class="row">
+      <input type="password" data-s="appId" placeholder="Application ID (firmware 4)" autocomplete="off" autocapitalize="off" spellcheck="false">
+    </div>
+    <div class="hint">Firmware 4 Handy? Get a free Application ID at <a href="https://user.handyfeeling.com" target="_blank" rel="noopener">user.handyfeeling.com</a> and paste it here once.</div>
+    <div class="row">
+      <button class="b primary grow" data-a="connect">Connect</button>
     </div>
     <label class="f">Timing offset <input type="range" data-s="offsetMs" min="-500" max="500" step="10"><output></output></label>
     <div class="hint">Positive = strokes earlier. Use if the device lags the video.</div>
   </section>
 
   <details>
-    <summary>Tuning</summary>
+    <summary data-o="moreSummary">More</summary>
+    <div class="row">
+      <button class="b grow" data-a="scan">Pre-scan whole video</button>
+    </div>
+    <div class="hint">Optional. Analyses the whole video first for slightly tighter sync.</div>
+    <div class="row">
+      <button class="b grow" data-a="import">Import</button>
+      <button class="b grow" data-a="export">Export</button>
+      <button class="b danger" data-a="delete" aria-label="Delete script">Delete</button>
+      <input type="file" accept=".funscript,application/json" hidden>
+    </div>
+    <h2 style="margin-top:10px">Tuning</h2>
     <label class="f">Bottom <input type="range" data-s="minPos" min="0" max="100" step="1"><output></output></label>
     <label class="f">Top <input type="range" data-s="maxPos" min="0" max="100" step="1"><output></output></label>
     <label class="f">Sensitivity <input type="range" data-s="sensitivity" min="0" max="1" step="0.05"><output></output></label>
@@ -233,7 +245,7 @@ details summary { cursor: pointer; color: #9a9aab; font-size: 12px; text-transfo
 
       setScanning(on) {
         btn('scan').hidden = on;
-        btn('cancel').hidden = !on;
+        $('[data-o="scanRow"]').hidden = !on;
         btn('import').disabled = on;
         btn('delete').disabled = on;
         progress.classList.toggle('show', on);
@@ -247,7 +259,7 @@ details summary { cursor: pointer; color: #9a9aab; font-size: 12px; text-transfo
       setHasScript(has, scannedAll) {
         btn('export').disabled = !has;
         btn('delete').disabled = !has;
-        btn('scan').textContent = has ? (scannedAll ? 'Re-scan video' : 'Continue pre-scan') : 'Pre-scan whole video';
+        btn('scan').textContent = has ? (scannedAll ? 'Re-scan whole video' : 'Continue pre-scan') : 'Pre-scan whole video';
       },
 
       setVideoReady(ready) {
